@@ -6,9 +6,9 @@ fn process(filename: &str) -> Result<(), failure::Error> {
 
     let file = File::open(filename).unwrap();
     let reader = BufReader::new(file);
-    let parser = denture::Parser::from_reader(reader)?;
+    let tokenizer = denture::parser::Tokenizer::from_reader(reader)?;
 
-    println!("{:?}", parser);
+    println!("{:?}", tokenizer);
 
     Ok(())
 }

@@ -1,0 +1,36 @@
+mod line;
+
+use line::LineTokenizer;
+
+#[derive(Debug)]
+enum Operator {
+    Colon,
+}
+
+#[derive(Debug)]
+pub enum Token {
+    Comment(String),
+    Identifier(String),
+    Whitespaces(String),
+    Operator(Operator),
+    DecNumber(String),
+}
+
+#[derive(Debug)]
+pub struct Tokenizer {
+    lines: Vec<LineTokenizer>,
+}
+
+impl Tokenizer {
+    pub fn from_reader<R>(reader: R) -> Result<Self, failure::Error>
+    where
+        R: std::io::BufRead,
+    {
+        let lines = reader
+            .lines()
+            .map(|line| LineTokenizer::from_str(&line?).map_err(|err| failure::Error::from(err)))
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self { lines })
+    }
+}
