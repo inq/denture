@@ -59,15 +59,26 @@ pub struct LineTokenizer {
 }
 
 #[inline]
-fn match_first_char(index: usize, c: char) -> Option<State> {
-    Some(match c.to_ascii_lowercase() {
+fn match_first_char(index: usize, c: char) -> (Option<State>, Option<Token>) {
+    let mut token = None;
+    let state = Some(match c.to_ascii_lowercase() {
         '#' => State::Comment(index),
         'b' | 'f' | 'r' | 'u' => State::StringPrefixSingle,
         '0' => State::Zero,
+        ' ' => State::Whitespaces(index),
+        ':' => {
+            token = Some(Token::Operator(Operator::Colon));
+            State::Empty
+        }
+        '+' => {
+            token = Some(Token::Operator(Operator::Plus));
+            State::Empty
+        }
         c if c.is_numeric() => State::Number(NumberType::Dec, NumberState::Normal, index),
         c if unicode_xid::UnicodeXID::is_xid_start(c) => State::Identifier(index),
-        _ => return None,
-    })
+        _ => return (None, None),
+    });
+    (state, token)
 }
 
 impl LineTokenizer {
@@ -81,14 +92,22 @@ impl LineTokenizer {
                 (State::Indent, ' ') => State::Indent,
                 (s @ State::Indent, c) => {
                     offset = index;
-                    match_first_char(index, c).ok_or(Error::InvalidCharacter {
+                    let (state, token) = match_first_char(index, c);
+                    if let Some(token) = token {
+                        tokens.push(token);
+                    }
+                    state.ok_or(Error::InvalidCharacter {
                         state: s.to_string(),
                         c,
                     })?
                 }
                 (ref s @ State::Whitespaces(starts_at), c) => {
                     tokens.push(Token::Whitespaces(input[starts_at..index].to_string()));
-                    match_first_char(index, c).ok_or(Error::InvalidCharacter {
+                    let (state, token) = match_first_char(index, c);
+                    if let Some(token) = token {
+                        tokens.push(token);
+                    }
+                    state.ok_or(Error::InvalidCharacter {
                         state: s.to_string(),
                         c,
                     })?
@@ -114,6 +133,25 @@ impl LineTokenizer {
                         (p, c) => State::Identifier(index - 1),
                     }
                 }
+                (ref s @ State::Number(NumberType::Hex, NumberState::Normal, starts_at), c) => {
+                    match c {
+                        c if c.is_digit(16) => {
+                            State::Number(NumberType::Hex, NumberState::Normal, starts_at)
+                        }
+                        c => {
+                            tokens.push(Token::HexNumber(input[starts_at..index].to_string()));
+
+                            let (state, token) = match_first_char(index, c);
+                            if let Some(token) = token {
+                                tokens.push(token);
+                            }
+                            state.ok_or(Error::InvalidCharacter {
+                                state: s.to_string(),
+                                c,
+                            })?
+                        }
+                    }
+                }
                 (ref s @ State::Number(NumberType::Dec, number_state, starts_at), c) => {
                     match (c, number_state) {
                         (c, _) if c.is_numeric() => {
@@ -122,39 +160,52 @@ impl LineTokenizer {
                         ('_', NumberState::Normal) => {
                             State::Number(NumberType::Dec, NumberState::Underscore, starts_at)
                         }
-                        (' ', NumberState::Normal) => {
-                            // TODO: Support operators
-                            tokens.push(Token::DecNumber(input[starts_at..index].to_string()));
-                            State::Whitespaces(index)
+                        (c, NumberState::Normal) => {
+                            tokens.push(Token::HexNumber(input[starts_at..index].to_string()));
+
+                            let (state, token) = match_first_char(index, c);
+                            if let Some(token) = token {
+                                tokens.push(token);
+                            }
+                            state.ok_or(Error::InvalidCharacter {
+                                state: s.to_string(),
+                                c,
+                            })?
                         }
                         _ => {
                             return Err(Error::InvalidCharacter {
                                 state: s.to_string(),
                                 c,
-                            })
+                            });
                         }
                     }
                 }
                 (ref s @ State::Identifier(starts_at), c) => match c {
-                    ' ' => {
-                        tokens.push(Token::Identifier(input[starts_at..index].to_string()));
-                        State::Whitespaces(index)
-                    }
                     c if unicode_xid::UnicodeXID::is_xid_continue(c) => {
                         State::Identifier(starts_at)
                     }
-                    ':' => {
-                        tokens.push(Token::Identifier(input[starts_at..index].to_string()));
-                        tokens.push(Token::Operator(Operator::Colon));
-                        State::Empty
-                    }
                     c => {
-                        return Err(Error::InvalidCharacter {
+                        tokens.push(Token::Identifier(input[starts_at..index].to_string()));
+                        let (state, token) = match_first_char(index, c);
+                        if let Some(token) = token {
+                            tokens.push(token);
+                        }
+                        state.ok_or(Error::InvalidCharacter {
                             state: s.to_string(),
                             c,
-                        });
+                        })?
                     }
                 },
+                (ref s @ State::Empty, c) => {
+                    let (state, token) = match_first_char(index, c);
+                    if let Some(token) = token {
+                        tokens.push(token);
+                    }
+                    state.ok_or(Error::InvalidCharacter {
+                        state: s.to_string(),
+                        c,
+                    })?
+                }
                 (State::Comment(starts_at), _) => State::Comment(starts_at),
                 (state, c) => {
                     return Err(Error::InvalidCharacter {
@@ -168,9 +219,11 @@ impl LineTokenizer {
             State::Comment(starts_at) => {
                 tokens.push(Token::Comment(input[starts_at..].to_string()))
             }
-
             State::Number(NumberType::Dec, NumberState::Normal, starts_at) => {
                 tokens.push(Token::DecNumber(input[starts_at..].to_string()))
+            }
+            State::Number(NumberType::Hex, NumberState::Normal, starts_at) => {
+                tokens.push(Token::HexNumber(input[starts_at..].to_string()))
             }
             State::Indent | State::Whitespaces(_) | State::Empty => (),
             State::Identifier(starts_at) => {
@@ -216,5 +269,39 @@ mod tests {
         }
 
         assert!(LineTokenizer::from_str("100_000_000_").is_err());
+        assert!(LineTokenizer::from_str("100__000_000").is_err());
+    }
+
+    #[test]
+    fn test_hex_number() {
+        match LineTokenizer::from_str("0x10fF + 0x1234")
+            .unwrap()
+            .tokens
+            .as_slice()
+        {
+            [Token::HexNumber(hex_a), Token::Whitespaces(space_a), Token::Operator(Operator::Plus), Token::Whitespaces(space_b), Token::HexNumber(hex_b)] =>
+            {
+                assert_eq!(hex_a, "0x10fF", "{}", hex_a);
+                assert_eq!(space_a, " ", "{}", space_a);
+                assert_eq!(hex_b, "0x1234", "{}", hex_b);
+                assert_eq!(space_b, " ", "{}", space_b);
+            }
+            etc => {
+                panic!("{:?}", etc);
+            }
+        }
+        match LineTokenizer::from_str("0xff+0x01")
+            .unwrap()
+            .tokens
+            .as_slice()
+        {
+            [Token::HexNumber(hex_a), Token::Operator(Operator::Plus), Token::HexNumber(hex_b)] => {
+                assert_eq!(hex_a, "0xff", "{}", hex_a);
+                assert_eq!(hex_b, "0x01", "{}", hex_b);
+            }
+            etc => {
+                panic!("{:?}", etc);
+            }
+        }
     }
 }

@@ -5,6 +5,7 @@ use line::LineTokenizer;
 #[derive(Debug)]
 enum Operator {
     Colon,
+    Plus,
 }
 
 #[derive(Debug)]
@@ -14,6 +15,7 @@ pub enum Token {
     Whitespaces(String),
     Operator(Operator),
     DecNumber(String),
+    HexNumber(String),
 }
 
 #[derive(Debug)]
