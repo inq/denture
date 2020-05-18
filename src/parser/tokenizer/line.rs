@@ -25,6 +25,26 @@ enum NumberType {
     Dec,
 }
 
+impl NumberType {
+    fn radix(self) -> u32 {
+        match self {
+            NumberType::Hex => 16,
+            NumberType::Oct => 8,
+            NumberType::Bin => 2,
+            NumberType::Dec => 10,
+        }
+    }
+
+    fn token_builder(self) -> fn(String) -> Token {
+        match self {
+            NumberType::Hex => Token::HexNumber,
+            NumberType::Oct => Token::OctNumber,
+            NumberType::Bin => Token::BinNumber,
+            NumberType::Dec => Token::DecNumber,
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 enum NumberState {
     Normal,
@@ -133,25 +153,31 @@ impl LineTokenizer {
                         (p, c) => State::Identifier(index - 1),
                     }
                 }
-                (ref s @ State::Number(NumberType::Hex, NumberState::Normal, starts_at), c) => {
-                    match c {
-                        c if c.is_digit(16) => {
-                            State::Number(NumberType::Hex, NumberState::Normal, starts_at)
-                        }
-                        c => {
-                            tokens.push(Token::HexNumber(input[starts_at..index].to_string()));
+                (
+                    ref
+                    s
+                    @
+                    State::Number(
+                        t @ (NumberType::Hex | NumberType::Oct | NumberType::Bin),
+                        NumberState::Normal,
+                        starts_at,
+                    ),
+                    c,
+                ) => match c {
+                    c if c.is_digit(t.radix()) => State::Number(t, NumberState::Normal, starts_at),
+                    c => {
+                        tokens.push(t.token_builder()(input[starts_at..index].to_string()));
 
-                            let (state, token) = match_first_char(index, c);
-                            if let Some(token) = token {
-                                tokens.push(token);
-                            }
-                            state.ok_or(Error::InvalidCharacter {
-                                state: s.to_string(),
-                                c,
-                            })?
+                        let (state, token) = match_first_char(index, c);
+                        if let Some(token) = token {
+                            tokens.push(token);
                         }
+                        state.ok_or(Error::InvalidCharacter {
+                            state: s.to_string(),
+                            c,
+                        })?
                     }
-                }
+                },
                 (ref s @ State::Number(NumberType::Dec, number_state, starts_at), c) => {
                     match (c, number_state) {
                         (c, _) if c.is_numeric() => {
@@ -219,11 +245,8 @@ impl LineTokenizer {
             State::Comment(starts_at) => {
                 tokens.push(Token::Comment(input[starts_at..].to_string()))
             }
-            State::Number(NumberType::Dec, NumberState::Normal, starts_at) => {
-                tokens.push(Token::DecNumber(input[starts_at..].to_string()))
-            }
-            State::Number(NumberType::Hex, NumberState::Normal, starts_at) => {
-                tokens.push(Token::HexNumber(input[starts_at..].to_string()))
+            State::Number(t, NumberState::Normal, starts_at) => {
+                tokens.push(t.token_builder()(input[starts_at..].to_string()))
             }
             State::Indent | State::Whitespaces(_) | State::Empty => (),
             State::Identifier(starts_at) => {
@@ -273,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hex_number() {
+    fn test_numbers() {
         match LineTokenizer::from_str("0x10fF + 0x1234")
             .unwrap()
             .tokens
@@ -290,6 +313,7 @@ mod tests {
                 panic!("{:?}", etc);
             }
         }
+
         match LineTokenizer::from_str("0xff+0x01")
             .unwrap()
             .tokens
@@ -298,6 +322,24 @@ mod tests {
             [Token::HexNumber(hex_a), Token::Operator(Operator::Plus), Token::HexNumber(hex_b)] => {
                 assert_eq!(hex_a, "0xff", "{}", hex_a);
                 assert_eq!(hex_b, "0x01", "{}", hex_b);
+            }
+            etc => {
+                panic!("{:?}", etc);
+            }
+        }
+
+        match LineTokenizer::from_str("0b01001 + 0o1234+0x1010")
+            .unwrap()
+            .tokens
+            .as_slice()
+        {
+            [Token::BinNumber(bin_a), Token::Whitespaces(space_a), Token::Operator(Operator::Plus), Token::Whitespaces(space_b), Token::OctNumber(oct_a), Token::Operator(Operator::Plus), Token::HexNumber(hex_a)] =>
+            {
+                assert_eq!(bin_a, "0b01001", "{}", bin_a);
+                assert_eq!(space_a, " ", "{}", space_a);
+                assert_eq!(oct_a, "0o1234", "{}", oct_a);
+                assert_eq!(space_b, " ", "{}", space_b);
+                assert_eq!(hex_a, "0x1010", "{}", hex_a);
             }
             etc => {
                 panic!("{:?}", etc);

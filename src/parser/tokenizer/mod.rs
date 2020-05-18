@@ -3,7 +3,7 @@ mod line;
 use line::LineTokenizer;
 
 #[derive(Debug)]
-enum Operator {
+pub enum Operator {
     Colon,
     Plus,
 }
@@ -14,6 +14,8 @@ pub enum Token {
     Identifier(String),
     Whitespaces(String),
     Operator(Operator),
+    BinNumber(String),
+    OctNumber(String),
     DecNumber(String),
     HexNumber(String),
 }
